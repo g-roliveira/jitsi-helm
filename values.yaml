@@ -239,7 +239,7 @@ octo:
 jibri:
   ## Enabling Jibri will allow users to record
   ## and/or stream their meetings (e.g. to YouTube).
-  enabled: enable
+  enabled: true
 
   ## Use external Jibri installation.
   ## This setting skips the creation of Jibri Deployment altogether,
@@ -342,12 +342,11 @@ jibri:
       - >-
         curl -sq localhost:2222/jibri/api/v1.0/health | jq '"\(.status.health.healthStatus) \(.status.busyStatus)"' | grep -qP 'HEALTHY (IDLE|BUSY)' #magic___^_^___line #magic___^_^___line
   extraEnvs:
+    CHROMIUM_FLAGS: "--use-fake-ui-for-media-stream,--start-maximized,--kiosk,--enabled,--disable-infobars,--autoplay-policy=no-user-gesture-required,--no-sandbox,–-disable-dev-shm-usage,--ignore-certificate-errors"
   vimeo:
     enable: true
-    secretName: {}
+    # secretName: {}
 
-    # Variaveis Chromium
-    CHROMIUM_FLAGS: "--use-fake-ui-for-media-stream,--start-maximized,--kiosk,--enabled,--disable-infobars,--autoplay-policy=no-user-gesture-required,--no-sandbox,–-disable-dev-shm-usage,--ignore-certificate-errors"
 
 serviceAccount:
   # Specifies whether a service account should be created
