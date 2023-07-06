@@ -66,7 +66,6 @@ spec:
         - configMapRef:
             name: {{ include "jitsi-meet.jibri.fullname" . }}
 
-
         env:
         {{- if .Values.jibri.vimeo.enable }}
         - name: VIMEO_TOKEN
