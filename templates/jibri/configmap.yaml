@@ -9,12 +9,13 @@ data:
   XMPP_SERVER: '{{ include "jitsi-meet.xmpp.server" . }}'
   JIBRI_BREWERY_MUC: '{{ .Values.jibri.breweryMuc }}'
   JIBRI_RECORDING_DIR: '{{ .Values.jibri.recordingDir | default "/data/recordings" }}'
-  JIBRI_FINALIZE_RECORDING_SCRIPT_PATH: "{{ if .Values.jibri.vimeo.enable }}/config/sync.py{{ else }}/config/finalize.sh{{ end }}"
+  JIBRI_FINALIZE_RECORDING_SCRIPT_PATH: "{{ if .Values.jibri.vimeo.enable }}/vimeo/sync.py{{ else }}/config/finalize.sh{{ end }}"
   {{- if and .Values.jibri.vimeo.enable .Values.jibri.recording }}
   # Variaveis para o Vimeo
-  VIMEO_SYNC: "/config/sync.py"
-  VIMEO_PENDING: "/config/pending.py"
-  VIMEO_RETRY: "/config/retry.py"
+  VIMEO_SYNC: "/vimeo/sync.py"
+  VIMEO_PENDING: "/vimeo/pending.py"
+  VIMEO_RETRY: "/vimeo/retry.py"
+  VIMEO_TOKEN: /vimeo/credentials.json
   {{- end }}  
   
   JIBRI_STRIP_DOMAIN_JID: muc
