@@ -1,0 +1,140 @@
+kind: ConfigMap
+apiVersion: v1
+metadata:
+  name: {{ include "jitsi-meet.jibri.fullname" . }}-vimeo-pending
+  labels:
+    {{- include "jitsi-meet.jibri.labels" . | nindent 4 }}
+data:
+  pending.py: |-
+    #! /usr/bin/python3
+    import json
+
+    import vimeo
+    import sys
+    import os
+    import datetime
+    import shutil
+
+
+    TRANSCODE_STATUS_COMPLETE = 'complete'
+    TRANSCODE_STATUS_PENDING = 'in_progress'
+
+
+    class ScriptException(Exception):
+        def __init__(self, message):
+            super(ScriptException, self).__init__(message)
+
+
+    def get_recording_folders():
+        pending_path = os.environ.get('VIMEOSCRIPT_PENDING_PATH', '/data/pending')
+
+        if not os.path.isdir(pending_path):
+            return []
+
+        folder_list = list(map(lambda item: f"{pending_path}/{item}", os.listdir(pending_path)))
+
+        return list(filter(lambda item: os.path.isdir(f"{item}"), folder_list))
+
+
+    def process_recording_folder(folder_path):
+        uploading_info = extract_uploading_info(folder_path)
+
+        if not uploading_info.get('uri', None):
+            raise ScriptException(f"Uploading file do not contain URI key")
+
+        status = check_status(uploading_info.get('uri'))
+
+        if status == TRANSCODE_STATUS_COMPLETE:
+            on_complete(folder_path)
+        elif status == TRANSCODE_STATUS_PENDING:
+            on_pending(folder_path)
+        else:
+            raise ScriptException(f"FAIL: Error while transcoding the uploaded")
+
+
+    def on_complete(folder_path):
+        log_message = f"SUCCESS: Upload completed with success from folder [{folder_path}]. Recording folder will be deleted."
+        log(log_message)
+
+        shutil.rmtree(folder_path)
+
+
+    def on_failure(folder_path, uploading_info, message):
+        failure_path = os.environ.get('VIMEOSCRIPT_FAILURE_PATH', '/data/failure')
+
+        if not os.path.isdir(failure_path):
+            os.makedirs(failure_path)
+        shutil.move(folder_path, failure_path)
+
+        folder_name = folder_path.split('/')[-1]
+
+        uploading_info['message'] = message
+
+        with open(f"{failure_path}/{folder_name}/uploading_info.json", 'w') as file:
+            file.write(json.dumps(uploading_info))
+
+        log_message = f"FAIL: Failed to upload the file [{folder_path}] with error `{message}`. Folder has been moved to path {failure_path}/{folder_name}."
+        log(log_message)
+
+
+    def on_pending(folder_path):
+        log_message = f"PENDING: Upload still with status pending from folder [{folder_path}]. Recording folder will not be moved to be checked later."
+        log(log_message)
+
+
+    def log(message):
+        with open("/data/script.log", 'a+') as file:
+            file.write(f"PENDING | {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')} | {message} \n\n")
+
+
+    def get_credentials():
+        credentials_path = os.environ.get('VIMEO_TOKEN')
+
+        if not os.path.isfile(credentials_path):
+            raise ScriptException(f"Vimeo credentials is not found on path {credentials_path}")
+
+        file = open(credentials_path, 'r')
+        credentials = dict(json.load(file))
+        if not credentials.get('access_token') or not credentials.get('client_secret') or not credentials.get('client_id'):
+            raise ScriptException(f"Missing some credentials info in {credentials_path}")
+
+        return credentials
+
+
+    def check_status(uri):
+        credentials = get_credentials()
+
+        client = vimeo.VimeoClient(
+            credentials.get('access_token'), credentials.get('client_secret'), credentials.get('client_id'))
+
+        response = client.get(uri + '?fields=transcode.status').json()
+
+        return response['transcode']['status']
+
+
+    def extract_uploading_info(folder_path):
+
+        if not folder_path:
+            raise ScriptException('Missing folder path')
+
+        if not os.path.isdir(folder_path):
+            raise ScriptException(f"Recording path is not a directory {folder_path}")
+
+        if not os.path.isfile(f"{folder_path}/uploading_info.json"):
+            raise ScriptException(f"Uploading info file not find in path {folder_path}")
+
+        with open(f"{folder_path}/uploading_info.json", 'r') as file:
+            return dict(json.load(file))
+
+
+    def main():
+        log('Starting check status script')
+        folders = get_recording_folders()
+        for folder in folders:
+            try:
+                process_recording_folder(folder)
+            except ScriptException as exception:
+                on_failure(folder, {}, str(exception))
+
+
+    main()

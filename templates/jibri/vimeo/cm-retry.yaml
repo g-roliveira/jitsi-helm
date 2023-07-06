@@ -1,0 +1,197 @@
+kind: ConfigMap
+apiVersion: v1
+metadata:
+  name: {{ include "jitsi-meet.jibri.fullname" . }}-vimeo-retry
+  labels:
+    {{- include "jitsi-meet.jibri.labels" . | nindent 4 }}
+data:
+  retry.py: |-
+    #! /usr/bin/python3
+    import json
+
+    import vimeo
+    import sys
+    import os
+    import datetime
+    import shutil
+    import traceback
+
+
+    class ScriptException(Exception):
+        def __init__(self, message):
+            super(ScriptException, self).__init__(message)
+
+
+    def extract_args(args):
+        if not (len(args) > 1):
+            raise ScriptException('Missing args')
+
+        return {
+            'recording_folder_path': args[1],
+        }
+
+
+    def extract_recording_info(recording_folder_path):
+        if not recording_folder_path:
+            raise ScriptException('Missing folder path')
+
+        if not os.path.isdir(recording_folder_path):
+            raise ScriptException(f'recording path is not a directory {recording_folder_path}')
+
+        if not os.path.isfile(f"{recording_folder_path}/metadata.json"):
+            raise ScriptException(f'Metadata file not found in {recording_folder_path}')
+
+        metadata_file = open(f"{recording_folder_path}/metadata.json", 'r')
+
+        metadata = dict(json.load(metadata_file))
+
+        metadata_file.close()
+
+        if not metadata.get('meeting_url'):
+            raise ScriptException(f"Missing [meeting_url] in metadata json file in path {recording_folder_path}")
+
+        url_splitted = metadata.get('meeting_url').split('/')
+
+        if not len(url_splitted):
+            raise ScriptException(f"Could not retrieve the room name from metadata file in path {recording_folder_path}")
+
+        folder_name = recording_folder_path.split('/')[-1]
+
+        room_name = f"{url_splitted[-1]} on {datetime.datetime.now().strftime('%Y-%m-%d %H-%M')}.mp4"
+
+        file_list = list(filter(lambda file: '.mp4' in file, os.listdir(recording_folder_path)))
+
+        if not len(file_list):
+            raise ScriptException(f'Video not found in path {recording_folder_path}')
+
+        return {
+            'file_path': f"{recording_folder_path}/{file_list[0]}",
+            'file_name': room_name if room_name else f"untitled on {datetime.datetime.now().strftime('%Y-%m-%d %H-%M')}.mp4",
+            'folder_name': folder_name
+        }
+
+
+    def extract_uploading_info(data_args):
+        if not data_args['recording_folder_path']:
+            raise ScriptException('Missing folder path')
+
+        if not os.path.isdir(data_args['recording_folder_path']):
+            raise ScriptException(f"recording path is not a directory {data_args['recording_folder_path']}")
+
+        if not os.path.isfile(f"{data_args['recording_folder_path']}/uploading_info.json"):
+            return None
+
+        uploading_info_file = open(f"{data_args['recording_folder_path']}/uploading_info.json", 'r')
+
+        uploading_info = dict(json.load(uploading_info_file))
+
+        uploading_info_file.close()
+
+        return uploading_info
+
+
+    def get_credentials():
+        credentials_path = os.environ.get('CREDENTIALS_PATH', '/data/credentials/credentials.json')
+
+        if not os.path.isfile(credentials_path):
+            raise ScriptException(f"Vimeo credentials is not found on path {credentials_path}")
+
+        file = open(credentials_path, 'r')
+        credentials = dict(json.load(file))
+        if not credentials.get('access_token') or not credentials.get('client_secret') or not credentials.get('client_id'):
+            raise ScriptException(f"Missing some credentials info in {credentials_path}")
+
+        return credentials
+
+
+    def upload(credentials, data):
+
+        if not credentials:
+            raise ScriptException('Missing credentials')
+
+        if not data:
+            raise ScriptException('Missing file data')
+
+        if not data.get('file_path'):
+            raise ScriptException('Missing file path')
+
+        if not data.get('file_name'):
+            raise ScriptException('Missing file name')
+
+        client = vimeo.VimeoClient(
+            credentials.get('access_token'), credentials.get('client_secret'), credentials.get('client_id'))
+
+        return client.upload(data.get('file_path'), data={
+          'name': data.get('file_name'),
+          'description': 'Description of the uploaded video'
+        })
+
+
+    def main(args):
+        data_args = extract_args(args)
+        uploading_info = extract_uploading_info(data_args)
+        try:
+            file_info = extract_recording_info(data_args['recording_folder_path'])
+            credentials = get_credentials()
+
+            uri = upload(credentials, file_info)
+            on_success(data_args, file_info, uri)
+        except ScriptException as exception:
+            failure_path = os.environ.get('VIMEOSCRIPT_FAILURE_PATH', '/data/failure')
+            on_failure(data_args, uploading_info, failure_path, str(exception), 'script')
+        except vimeo.exceptions.BaseVimeoException as exception:
+            retry_path = os.environ.get('VIMEOSCRIPT_RETRY_PATH', '/data/retry')
+            on_failure(data_args, uploading_info, retry_path, str(exception), 'vimeo upload')
+
+
+    def on_failure(data_args, uploading_info, path_to_move, message, error_type):
+        attempts = 0
+        if uploading_info:
+            attempts = uploading_info.get('attempts', 0) + 1
+        if not os.path.isdir(path_to_move):
+            os.makedirs(path_to_move)
+        shutil.move(data_args['recording_folder_path'], path_to_move)
+
+        folder_name = data_args['recording_folder_path'].split('/')[-1]
+
+        with open(f"{path_to_move}/{folder_name}/uploading_info.json", 'w') as file:
+            file.write(json.dumps({
+                "message": message,
+                "error_type": error_type,
+                "attempts": attempts
+            }))
+
+        log_message = f"FAIL: Failed to upload the file [{data_args['recording_folder_path']}] with error `{message}`. Folder has been moved to path {path_to_move}/{folder_name}."
+        log(log_message)
+
+
+    def on_success(data_args, file_info, uri):
+        pending_path = os.environ.get('VIMEOSCRIPT_PENDING_PATH', '/data/pending')
+
+        if not os.path.isdir(pending_path):
+            os.makedirs(pending_path)
+        shutil.move(data_args['recording_folder_path'], pending_path)
+        with open(f"{pending_path}/{file_info['folder_name']}/uploading_info.json", 'w') as file:
+            file.write(json.dumps({
+                "uri": uri,
+                "file_name": file_info['file_name'],
+                "recording_folder_path": f"{pending_path}/{file_info['folder_name']}"
+            }))
+
+        message = f"SUCCESS: Success to upload the file [{data_args['recording_folder_path']}]. Folder has been moved to pending folder on {pending_path}/{file_info['folder_name']}."
+        log(message)
+
+
+    def log(message):
+        with open("/data/script.log", 'a+') as file:
+            file.write(f"SYNC | {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')} | {message} \n\n")
+
+
+    try:
+        main(sys.argv)
+        sys.exit(0)
+    except Exception as e:
+        print(str(e))
+        message = f"FAIL: Failed to execute command {sys.argv}. Exiting with error `{str(e)}` at {traceback.format_exc()}."
+        log(message)
+        sys.exit(message)
