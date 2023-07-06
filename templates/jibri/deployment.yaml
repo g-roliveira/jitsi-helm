@@ -66,16 +66,17 @@ spec:
         - configMapRef:
             name: {{ include "jitsi-meet.jibri.fullname" . }}
 
-        {{- if (gt (int .Values.jibri.replicaCount) 1) }}
-        # Set Jibri Instance ID based on pod name:
+
         env:
         {{- if .Values.jibri.vimeo.enable }}
         - name: VIMEO_TOKEN
           valueFrom:
-            secretKeyRef:
-              name: {{ .Values.jibri.vimeo.secretName }}
-              key: credentials.json
-        {{- end }}      
+            configMapKeyRef:
+              name: {{ include "jitsi-meet.jibri.fullname" . }}
+              key: VIMEO_TOKEN
+        {{- end }}
+        {{- if (gt (int .Values.jibri.replicaCount) 1) }}
+        # Set Jibri Instance ID based on pod name:    
         - name: JIBRI_INSTANCE_ID
           valueFrom:
             fieldRef:
@@ -86,6 +87,21 @@ spec:
           {{- toYaml .Values.jibri.resources | nindent 12 }}
 
         volumeMounts:
+        {{- if .Values.jibri.vimeo.enable }}
+        - name: {{ include "jitsi-meet.jibri.fullname" . }}-vimeo-sync
+          mountPath: /vimeo/sync.py
+          subPath: sync.py
+        - name: {{ include "jitsi-meet.jibri.fullname" . }}-vimeo-pending
+          mountPath: /vimeo/pending.py
+          subPath: pending.py
+        - name: {{ include "jitsi-meet.jibri.fullname" . }}-vimeo-retry
+          mountPath: /vimeo/retry.py
+          subPath: retry.py
+        - name: {{ .Values.jibri.vimeo.secretName }}
+          mountPath: "/vimeo/credentials.json"
+          subPath: credentials.json
+          readOnly: true 
+        {{- end }}     
         - name: jibri-data
           mountPath: /data
         {{- if .Values.jibri.shm.enabled }}
@@ -94,6 +110,32 @@ spec:
         {{- end }}
 
       volumes:
+      {{- if .Values.jibri.vimeo.enable }}
+      - name: {{ include "jitsi-meet.jibri.fullname" . }}-vimeo-sync
+        configMap:
+          name: {{ include "jitsi-meet.jibri.fullname" . }}-vimeo-sync
+          items:
+          - key: sync.py
+            path: sync.py
+            mode: 0755
+      - name: {{ include "jitsi-meet.jibri.fullname" . }}-vimeo-pending
+        configMap:
+          name: {{ include "jitsi-meet.jibri.fullname" . }}-vimeo-pending
+          items:
+          - key: pending.py
+            path: pending.py
+            mode: 0755
+      - name: {{ include "jitsi-meet.jibri.fullname" . }}-vimeo-retry
+        configMap:
+          name: {{ include "jitsi-meet.jibri.fullname" . }}-vimeo-retry
+          items:
+          - key: retry.py
+            path: retry.py
+            mode: 0755
+      - name: {{ .Values.jibri.vimeo.secretName }}
+        secret:
+          secretName: {{ .Values.jibri.vimeo.secretName }}
+        {{- end }}     
       - name: jibri-data
         {{- if .Values.jibri.persistence.enabled }}
         persistentVolumeClaim:
